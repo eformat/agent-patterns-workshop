@@ -1,0 +1,66 @@
+= Workshop Overview
+:navtitle: Workshop Overview
+:toc: macro
+:toclevels: 1
+:icons: font
+
+toc::[]
+
+This workshop walks through nine agent architecture patterns, organized from simplest to most complex. Each module includes an architecture diagram, a code walkthrough, and a hands-on exercise.
+
+== Pattern Progression
+
+[cols="1,3,2",options="header"]
+|===
+|Module |Pattern |Key Concept
+
+|1
+|Simple Chatbot
+|StateGraph basics, single node
+
+|2
+|RAG + Chatbot
+|Custom state, linear pipeline
+
+|3
+|Agent Tool Loop
+|Conditional edges, cycles, ToolNode
+
+|4
+|ReAct Agent
+|Prebuilt agents, reasoning loop
+
+|5
+|Supervisor
+|Multi-agent, structured output routing
+
+|6
+|Conditional Edge Handoff
+|Static routing functions
+
+|7
+|Dynamic Handoff
+|LLM-driven routing decisions
+
+|8
+|Agent Pipeline
+|Sequential agent chain
+
+|9
+|Team Agent Swarms
+|Nested subgraphs, leader-worker teams
+|===
+
+== Core LangGraph Concepts
+
+**StateGraph** — The foundation of every pattern. A directed graph where nodes are Python functions that read and update shared state.
+
+**Nodes** — Functions that transform state. Each node receives the current state and returns updates.
+
+**Edges** — Connections between nodes. Can be static (always follow the same path) or conditional (choose the next node based on state).
+
+**MessagesState** — A built-in state schema with a `messages` list, perfect for chat-based applications.
+
+== Ready?
+
+xref:getting-connected.adoc[Set up your environment →]

@@ -1,0 +1,230 @@
+= Team Agent Swarms
+:navtitle: Module 9 — Team Swarms
+:toc: macro
+:toclevels: 1
+:icons: font
+
+Two self-contained agent teams — each a compiled LangGraph subgraph — are orchestrated by a parent graph that passes results between them.
+Within each team, a leader dispatches work to two workers, collects their outputs, and synthesises a result before handing off to the next team.
+This is the most compositional pattern in the workshop: graphs inside graphs, with clean state boundaries at every level.
+
+toc::[]
+
+== Architecture
+
+image::09-team-swarms.png[Team Agent Swarms Architecture,link=self,window=blank,width=600]
+
+== How It Works
+
+Each team is built with a factory function (`make_team`) that returns a *compiled subgraph*.
+The parent graph treats a compiled subgraph exactly like any other node — it calls `.invoke()` on it and receives a state dict back.
+
+Key concepts:
+
+* `Annotated[list[str], operator.add]` — a reducer that *appends* to the list rather than replacing it, so both workers can write to `worker_outputs` without clobbering each other.
+* `make_team` factory — one function produces both teams by parameterising the system prompts, demonstrating reusable team topology.
+* Conditional routing inside the subgraph — `router()` checks whether workers have run yet; dispatches them or routes to `leader_collect`.
+* Parent state vs team state — `ParentState` and `TeamState` are separate TypedDicts with clean encapsulation boundaries.
+
+WARNING: Subgraph state and parent state are *independent*. If you need data to flow from the parent into the subgraph, you must pass it explicitly in the `.invoke()` call.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+Team agent swarms — two teams (Research, Writing), each a compiled
+subgraph with a leader and two workers. The parent graph wires the teams in
+sequence: Research team output feeds the Writing team.
+"""
+
+import operator
+from typing import TypedDict, Annotated
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import StateGraph, START, END
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+class TeamState(TypedDict):
+    topic: str
+    worker_outputs: Annotated[list[str], operator.add]
+    team_result: str
+
+def make_team(name: str, w1_prompt: str, w2_prompt: str, leader_prompt: str):
+    """Return a compiled subgraph for a two-worker team."""
+    def worker1(s: TeamState):
+        r = llm.invoke([SystemMessage(content=w1_prompt), HumanMessage(content=s["topic"])])
+        return {"worker_outputs": [f"[{name}-W1] {r.content}"]}
+    def worker2(s: TeamState):
+        r = llm.invoke([SystemMessage(content=w2_prompt), HumanMessage(content=s["topic"])])
+        return {"worker_outputs": [f"[{name}-W2] {r.content}"]}
+    def leader(s: TeamState):
+        if not s.get("worker_outputs"):
+            return {}
+        r = llm.invoke([SystemMessage(content=leader_prompt),
+                        HumanMessage(content="\n\n".join(s["worker_outputs"]))])
+        return {"team_result": r.content}
+    def router(s: TeamState):
+        return "worker1" if not s.get("worker_outputs") else "leader_collect"
+
+    g = StateGraph(TeamState)
+    g.add_node("leader",         leader)
+    g.add_node("leader_collect", leader)
+    g.add_node("worker1",        worker1)
+    g.add_node("worker2",        worker2)
+    g.add_edge(START, "leader")
+    g.add_conditional_edges("leader", router)
+    g.add_edge("worker1", "worker2")
+    g.add_edge("worker2", "leader_collect")
+    g.add_edge("leader_collect", END)
+    return g.compile()
+
+research_team = make_team(
+    "Research",
+    w1_prompt="List 3 historical facts about the topic.",
+    w2_prompt="List 3 recent developments about the topic.",
+    leader_prompt="Synthesize these notes into a concise research brief.",
+)
+
+writing_team = make_team(
+    "Writing",
+    w1_prompt="Write an engaging introduction paragraph on the topic.",
+    w2_prompt="Write a compelling conclusion paragraph on the topic.",
+    leader_prompt="Merge the intro and conclusion into one short cohesive article.",
+)
+
+class ParentState(TypedDict):
+    topic: str
+    research_brief: str
+    final_report: str
+
+def run_research(state: ParentState) -> ParentState:
+    result = research_team.invoke({"topic": state["topic"], "worker_outputs": [], "team_result": ""})
+    return {**state, "research_brief": result["team_result"]}
+
+def run_writing(state: ParentState) -> ParentState:
+    ctx = f"{state['topic']}\n\nResearch brief:\n{state['research_brief']}"
+    result = writing_team.invoke({"topic": ctx, "worker_outputs": [], "team_result": ""})
+    return {**state, "final_report": result["team_result"]}
+
+parent = StateGraph(ParentState)
+parent.add_node("research_team", run_research)
+parent.add_node("writing_team",  run_writing)
+parent.add_edge(START, "research_team")
+parent.add_edge("research_team", "writing_team")
+parent.add_edge("writing_team", END)
+graph = parent.compile()
+
+if __name__ == "__main__":
+    topic = "Quantum computing and its future applications"
+    print(f"Topic: {topic}\n{'='*60}")
+    result = graph.invoke({"topic": topic, "research_brief": "", "final_report": ""})
+    print("\n--- RESEARCH BRIEF (Team 1 output) ---")
+    print(result["research_brief"])
+    print("\n--- FINAL REPORT (Team 2 output) ---")
+    print(result["final_report"])
+----
+
+TIP: The `leader` function is registered as both `"leader"` and `"leader_collect"` — reusing the function body while giving the graph two distinct node names to route between.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > team_swarms.py << 'PYEOF'
+import operator
+from typing import TypedDict, Annotated
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import StateGraph, START, END
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+class TeamState(TypedDict):
+    topic: str
+    worker_outputs: Annotated[list[str], operator.add]
+    team_result: str
+
+def make_team(name, w1_prompt, w2_prompt, leader_prompt):
+    def worker1(s):
+        r = llm.invoke([SystemMessage(content=w1_prompt), HumanMessage(content=s["topic"])])
+        return {"worker_outputs": [f"[{name}-W1] {r.content}"]}
+    def worker2(s):
+        r = llm.invoke([SystemMessage(content=w2_prompt), HumanMessage(content=s["topic"])])
+        return {"worker_outputs": [f"[{name}-W2] {r.content}"]}
+    def leader(s):
+        if not s.get("worker_outputs"): return {}
+        r = llm.invoke([SystemMessage(content=leader_prompt),
+                        HumanMessage(content="\n\n".join(s["worker_outputs"]))])
+        return {"team_result": r.content}
+    def router(s):
+        return "worker1" if not s.get("worker_outputs") else "leader_collect"
+    g = StateGraph(TeamState)
+    g.add_node("leader", leader); g.add_node("leader_collect", leader)
+    g.add_node("worker1", worker1); g.add_node("worker2", worker2)
+    g.add_edge(START, "leader")
+    g.add_conditional_edges("leader", router)
+    g.add_edge("worker1", "worker2"); g.add_edge("worker2", "leader_collect")
+    g.add_edge("leader_collect", END)
+    return g.compile()
+
+research_team = make_team("Research",
+    "List 3 historical facts.", "List 3 recent developments.",
+    "Synthesize into a concise research brief.")
+writing_team = make_team("Writing",
+    "Write an engaging introduction.", "Write a compelling conclusion.",
+    "Merge into one short cohesive article.")
+
+class ParentState(TypedDict):
+    topic: str
+    research_brief: str
+    final_report: str
+
+def run_research(state):
+    r = research_team.invoke({"topic": state["topic"], "worker_outputs": [], "team_result": ""})
+    return {**state, "research_brief": r["team_result"]}
+def run_writing(state):
+    ctx = f"{state['topic']}\n\nResearch:\n{state['research_brief']}"
+    r = writing_team.invoke({"topic": ctx, "worker_outputs": [], "team_result": ""})
+    return {**state, "final_report": r["team_result"]}
+
+parent = StateGraph(ParentState)
+parent.add_node("research_team", run_research)
+parent.add_node("writing_team", run_writing)
+parent.add_edge(START, "research_team")
+parent.add_edge("research_team", "writing_team")
+parent.add_edge("writing_team", END)
+graph = parent.compile()
+
+if __name__ == "__main__":
+    topic = "Quantum computing and its future applications"
+    result = graph.invoke({"topic": topic, "research_brief": "", "final_report": ""})
+    print("--- RESEARCH BRIEF ---"); print(result["research_brief"])
+    print("--- FINAL REPORT ---"); print(result["final_report"])
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python team_swarms.py
+----
+
+=== Exercises
+
+. **Add a third worker.** Extend `make_team` to accept a `w3_prompt` and chain `worker2 -> worker3 -> leader_collect`.
+. **Add a third team.** Create a `review_team` that critiques the writing team's output.
+. **Print worker outputs.** In `run_research`, print each item in `result["worker_outputs"]` to see individual contributions.
+
+== Key Takeaways
+
+* A compiled subgraph is just a node from the parent graph's perspective.
+* `Annotated[list[str], operator.add]` enables multiple nodes to contribute to the same list without overwriting.
+* The `make_team` factory shows that team *topology* is reusable; only the *prompts* vary.
+* Separating `ParentState` from `TeamState` creates clean encapsulation — teams are self-contained units.

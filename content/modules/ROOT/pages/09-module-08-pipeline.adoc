@@ -1,0 +1,176 @@
+= Agent Pipeline
+:navtitle: Module 8 — Agent Pipeline
+:toc: macro
+:toclevels: 1
+:icons: font
+
+A strictly linear sequence of agents where each one reads from shared state, does its work, and writes its output back before passing control forward.
+There is no branching, looping, or conditional logic — just a clean assembly line.
+This pattern is ideal when each stage has a distinct role and depends only on the cumulative state produced so far.
+
+toc::[]
+
+== Architecture
+
+image::08-pipeline.png[Agent Pipeline Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+Each node receives the full `PipelineState` TypedDict and returns an updated copy using `{**state, "field": value}`.
+LangGraph merges the returned dict into state before invoking the next node.
+
+Key concepts:
+
+* Custom `TypedDict` state — each field records the output of one stage, making intermediate results inspectable.
+* `{**state, "field": value}` — idiomatic partial state update without losing earlier fields.
+* `add_edge` — unconditional connections; the graph has no decision points.
+* Separation of concerns — Researcher, Analyst, and Writer each have one job.
+
+NOTE: Because all edges are unconditional, this graph is a straight line. If you find yourself adding an `if`, consider a conditional edge pattern instead.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+Agent pipeline — a strictly linear sequence of agents.
+Each transforms the shared state and passes it to the next.
+
+flowchart LR
+  User --> Researcher --> Analyst --> Writer --> Output
+"""
+
+from typing import TypedDict
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import StateGraph, START, END
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+class PipelineState(TypedDict):
+    topic: str
+    research: str
+    analysis: str
+    report: str
+
+def researcher(state: PipelineState) -> PipelineState:
+    response = llm.invoke([
+        SystemMessage(content="You are a research assistant. List 5 key facts. Be concise."),
+        HumanMessage(content=state["topic"]),
+    ])
+    return {**state, "research": response.content}
+
+def analyst(state: PipelineState) -> PipelineState:
+    response = llm.invoke([
+        SystemMessage(content="You are a data analyst. Extract the 3 most important insights."),
+        HumanMessage(content=state["research"]),
+    ])
+    return {**state, "analysis": response.content}
+
+def writer(state: PipelineState) -> PipelineState:
+    prompt = f"Topic: {state['topic']}\n\nInsights:\n{state['analysis']}"
+    response = llm.invoke([
+        SystemMessage(content="You are a professional writer. Write a concise 2-paragraph summary."),
+        HumanMessage(content=prompt),
+    ])
+    return {**state, "report": response.content}
+
+builder = StateGraph(PipelineState)
+builder.add_node("researcher", researcher)
+builder.add_node("analyst",    analyst)
+builder.add_node("writer",     writer)
+
+builder.add_edge(START,        "researcher")
+builder.add_edge("researcher", "analyst")
+builder.add_edge("analyst",    "writer")
+builder.add_edge("writer",     END)
+
+graph = builder.compile()
+
+if __name__ == "__main__":
+    topic = "The impact of large language models on software development"
+    print(f"Topic: {topic}\n{'='*60}")
+    result = graph.invoke({"topic": topic, "research": "", "analysis": "", "report": ""})
+    print("\n--- RESEARCH ---")
+    print(result["research"])
+    print("\n--- ANALYSIS ---")
+    print(result["analysis"])
+    print("\n--- FINAL REPORT ---")
+    print(result["report"])
+----
+
+TIP: After `graph.invoke()` returns, every intermediate state field is available in the result dict. Use this to debug individual stages without re-running the whole pipeline.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > pipeline.py << 'PYEOF'
+from typing import TypedDict
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import StateGraph, START, END
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+class PipelineState(TypedDict):
+    topic: str
+    research: str
+    analysis: str
+    report: str
+
+def researcher(state: PipelineState) -> PipelineState:
+    r = llm.invoke([SystemMessage(content="List 5 key facts. Be concise."), HumanMessage(content=state["topic"])])
+    return {**state, "research": r.content}
+
+def analyst(state: PipelineState) -> PipelineState:
+    r = llm.invoke([SystemMessage(content="Extract the 3 most important insights."), HumanMessage(content=state["research"])])
+    return {**state, "analysis": r.content}
+
+def writer(state: PipelineState) -> PipelineState:
+    r = llm.invoke([SystemMessage(content="Write a concise 2-paragraph summary."),
+                    HumanMessage(content=f"Topic: {state['topic']}\n\nInsights:\n{state['analysis']}")])
+    return {**state, "report": r.content}
+
+builder = StateGraph(PipelineState)
+builder.add_node("researcher", researcher)
+builder.add_node("analyst", analyst)
+builder.add_node("writer", writer)
+builder.add_edge(START, "researcher")
+builder.add_edge("researcher", "analyst")
+builder.add_edge("analyst", "writer")
+builder.add_edge("writer", END)
+graph = builder.compile()
+
+if __name__ == "__main__":
+    topic = "The impact of large language models on software development"
+    result = graph.invoke({"topic": topic, "research": "", "analysis": "", "report": ""})
+    print("--- RESEARCH ---"); print(result["research"])
+    print("--- ANALYSIS ---"); print(result["analysis"])
+    print("--- REPORT ---"); print(result["report"])
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python pipeline.py
+----
+
+=== Exercises
+
+. **Add a fourth stage.** Insert a `translator` node that translates the report into Spanish.
+. **Inspect intermediate state.** Print `result["research"]` and `result["analysis"]` separately.
+. **Change the topic.** Try different subjects and observe how all three stages adapt.
+
+== Key Takeaways
+
+* A pipeline is the simplest multi-agent pattern — all edges are unconditional.
+* A custom `TypedDict` state makes each stage's input and output explicit.
+* `{**state, "field": value}` returns partial updates without losing earlier fields.
+* Every intermediate result is preserved, making pipelines easy to debug stage by stage.

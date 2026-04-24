@@ -1,0 +1,59 @@
+= Conclusion
+:navtitle: Conclusion
+:icons: font
+
+Congratulations! You have built nine agent architectures spanning the full spectrum of LangGraph patterns.
+
+== What You Built
+
+[cols="1,3",options="header"]
+|===
+|Module |What You Learned
+
+|1. Chatbot
+|StateGraph basics — a single node that calls an LLM
+
+|2. RAG + Chatbot
+|Custom state schemas and linear two-node pipelines
+
+|3. Agent Tool Loop
+|Conditional edges, cycles, and tool integration with ToolNode
+
+|4. ReAct Agent
+|Using `create_react_agent` for idiomatic reasoning loops
+
+|5. Supervisor
+|Multi-agent orchestration with structured output routing
+
+|6. Conditional Handoff
+|Static Python routing functions with `add_conditional_edges`
+
+|7. Dynamic Handoff
+|LLM-driven routing using `with_structured_output`
+
+|8. Pipeline
+|Sequential agent chains with accumulating state
+
+|9. Team Swarms
+|Nested subgraphs with leader-worker team coordination
+|===
+
+== Key Takeaways
+
+**Start simple.** Most LLM applications only need a chatbot or RAG pattern. Add complexity only when the task demands it.
+
+**Conditional edges are the core primitive.** Every advanced pattern — supervisors, handoffs, loops — is built on conditional edge routing.
+
+**Structured output enables reliable routing.** When the LLM needs to make routing decisions, `with_structured_output` gives you type-safe, parseable results.
+
+**Subgraphs compose.** Complex architectures like team swarms are just simple graphs nested inside each other.
+
+== Resources
+
+* https://langchain-ai.github.io/langgraph/[LangGraph Documentation^]
+* https://python.langchain.com/[LangChain Documentation^]
+* https://github.com/langchain-ai/langgraph/tree/main/examples[LangGraph Examples^]
+
+== Thank You
+
+We hope this workshop gave you a solid foundation for building agentic AI applications. Happy building!

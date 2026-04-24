@@ -1,0 +1,60 @@
+= Getting Connected
+:navtitle: Getting Connected
+:toc: macro
+:toclevels: 1
+:icons: font
+
+toc::[]
+
+Set up your Python environment and verify everything works before starting the modules.
+
+== Step 1: Create a Virtual Environment
+
+[.copypaste]
+[source,bash]
+----
+python3 -m venv venv && source venv/bin/activate
+----
+
+== Step 2: Install Dependencies
+
+[.copypaste]
+[source,bash]
+----
+pip install langchain-openai langgraph langchain-core pydantic
+----
+
+== Step 3: Set Your API Key
+
+[.copypaste]
+[source,bash]
+----
+export OPENAI_API_KEY="your-api-key-here"
+----
+
+WARNING: Replace `your-api-key-here` with your actual OpenAI API key. Never commit API keys to version control.
+
+== Step 4: Verify Installation
+
+[.copypaste]
+[source,bash]
+----
+python3 -c "
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langchain_openai import ChatOpenAI
+print('LangGraph version:', __import__('langgraph').__version__)
+print('All imports successful!')
+"
+----
+
+You should see the LangGraph version and a success message.
+
+=== Verify
+
+✓ Virtual environment is active +
+✓ All packages installed without errors +
+✓ Imports succeed and version prints correctly
+
+== Ready to Build
+
+xref:02-module-01-chatbot.adoc[Start Module 1: Simple Chatbot →]

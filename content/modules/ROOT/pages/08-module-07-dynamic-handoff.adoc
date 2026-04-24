@@ -1,0 +1,182 @@
+= Dynamic Handoff
+:navtitle: Module 7 — Dynamic Handoff
+:toc: macro
+:toclevels: 1
+:icons: font
+
+A supervisor agent uses a *structured LLM call* to decide at runtime which specialist handles each request.
+Unlike keyword-based routing, the model reads intent — it can handle phrasing that no static rule would catch.
+Structured output keeps the decision machine-readable and the graph deterministic.
+
+toc::[]
+
+== Architecture
+
+image::07-dynamic-handoff.png[Dynamic Handoff Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+The supervisor calls an LLM configured with `with_structured_output(RouteDecision)`.
+The model returns a validated Pydantic object whose `next` field names the target node.
+
+Key concepts:
+
+* `with_structured_output(Schema)` — binds a Pydantic model so every response is auto-parsed and validated.
+* `additional_kwargs` — a safe place to stash metadata on an `AIMessage` without polluting its content.
+* `reason` field — the model explains its choice, useful for debugging and explainability.
+
+WARNING: LLM-driven routing adds latency and cost. Use it when intent is ambiguous or expressed in varied natural language.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+Dynamic handoff — the supervisor uses a structured LLM call to decide
+which specialist to invoke. Routing is determined at runtime by the model.
+"""
+
+from typing import Literal
+from pydantic import BaseModel
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langgraph.graph import StateGraph, START, END, MessagesState
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+class RouteDecision(BaseModel):
+    next: Literal["math_agent", "writing_agent", "coding_agent"]
+    reason: str
+
+router_llm = llm.with_structured_output(RouteDecision)
+
+def supervisor(state: MessagesState) -> MessagesState:
+    system = SystemMessage(content=(
+        "You are a supervisor. Choose which specialist handles the user request. "
+        "Options: math_agent, writing_agent, coding_agent."
+    ))
+    decision: RouteDecision = router_llm.invoke([system] + state["messages"])
+    routing_msg = AIMessage(
+        content=f"Routing to {decision.next}: {decision.reason}",
+        additional_kwargs={"next": decision.next},
+    )
+    return {"messages": state["messages"] + [routing_msg]}
+
+def dynamic_route(state: MessagesState) -> str:
+    return state["messages"][-1].additional_kwargs.get("next", "coding_agent")
+
+def _reply(role: str, state: MessagesState) -> MessagesState:
+    user_msg = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+    response = llm.invoke([SystemMessage(content=f"You are a {role} expert."), user_msg])
+    return {"messages": state["messages"] + [AIMessage(content=f"[{role.title()}] {response.content}")]}
+
+def math_agent(state):    return _reply("math",    state)
+def writing_agent(state): return _reply("writing", state)
+def coding_agent(state):  return _reply("coding",  state)
+
+builder = StateGraph(MessagesState)
+builder.add_node("supervisor",    supervisor)
+builder.add_node("math_agent",    math_agent)
+builder.add_node("writing_agent", writing_agent)
+builder.add_node("coding_agent",  coding_agent)
+
+builder.add_edge(START, "supervisor")
+builder.add_conditional_edges("supervisor", dynamic_route,
+                               ["math_agent", "writing_agent", "coding_agent"])
+for agent in ("math_agent", "writing_agent", "coding_agent"):
+    builder.add_edge(agent, END)
+
+graph = builder.compile()
+
+if __name__ == "__main__":
+    queries = [
+        "What is the derivative of x^3 + 2x?",
+        "Write me a limerick about a lazy cat.",
+        "Explain the difference between a list and a tuple in Python.",
+    ]
+    for query in queries:
+        print(f"\nUser: {query}")
+        result = graph.invoke({"messages": [HumanMessage(content=query)]})
+        print(result["messages"][-1].content)
+----
+
+TIP: The `reason` field in `RouteDecision` is not just documentation — you can log it, surface it in a UI, or feed it to downstream agents.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > dynamic_handoff.py << 'PYEOF'
+from typing import Literal
+from pydantic import BaseModel
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langgraph.graph import StateGraph, START, END, MessagesState
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+class RouteDecision(BaseModel):
+    next: Literal["math_agent", "writing_agent", "coding_agent"]
+    reason: str
+
+router_llm = llm.with_structured_output(RouteDecision)
+
+def supervisor(state: MessagesState) -> MessagesState:
+    system = SystemMessage(content="You are a supervisor. Choose: math_agent, writing_agent, coding_agent.")
+    decision = router_llm.invoke([system] + state["messages"])
+    msg = AIMessage(content=f"Routing to {decision.next}: {decision.reason}",
+                    additional_kwargs={"next": decision.next})
+    return {"messages": state["messages"] + [msg]}
+
+def dynamic_route(state): return state["messages"][-1].additional_kwargs.get("next", "coding_agent")
+
+def _reply(role, state):
+    user_msg = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+    r = llm.invoke([SystemMessage(content=f"You are a {role} expert."), user_msg])
+    return {"messages": state["messages"] + [AIMessage(content=f"[{role.title()}] {r.content}")]}
+
+def math_agent(s):    return _reply("math", s)
+def writing_agent(s): return _reply("writing", s)
+def coding_agent(s):  return _reply("coding", s)
+
+builder = StateGraph(MessagesState)
+for n, f in [("supervisor", supervisor), ("math_agent", math_agent),
+             ("writing_agent", writing_agent), ("coding_agent", coding_agent)]:
+    builder.add_node(n, f)
+builder.add_edge(START, "supervisor")
+builder.add_conditional_edges("supervisor", dynamic_route, ["math_agent", "writing_agent", "coding_agent"])
+for a in ["math_agent", "writing_agent", "coding_agent"]:
+    builder.add_edge(a, END)
+graph = builder.compile()
+
+if __name__ == "__main__":
+    for q in ["What is the derivative of x^3?", "Write a limerick about a cat", "List vs tuple in Python?"]:
+        print(f"\nUser: {q}")
+        r = graph.invoke({"messages": [HumanMessage(content=q)]})
+        print(r["messages"][-1].content)
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python dynamic_handoff.py
+----
+
+=== Exercises
+
+. **Add a `confidence` field** to `RouteDecision` (a float 0-1). Print it alongside the routing message.
+. **Add a fallback.** Create a `general_agent` as default when routing is uncertain.
+. **Compare with Module 6.** Send the same queries through both static and dynamic. When do they differ?
+
+== Key Takeaways
+
+* `with_structured_output` turns an LLM response into a validated Pydantic object.
+* Storing routing decisions in `additional_kwargs` keeps content human-readable while remaining machine-parseable.
+* The optional `targets` list validates reachable nodes at compile time.
+* Dynamic routing trades token cost for flexibility — best for nuanced intent.

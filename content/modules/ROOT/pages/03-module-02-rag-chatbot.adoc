@@ -1,0 +1,197 @@
+= RAG + Chatbot
+:navtitle: Module 2 — RAG + Chatbot
+:toc: macro
+:toclevels: 1
+:icons: font
+
+Retrieval-Augmented Generation (RAG) grounds the LLM's answer in documents you supply.
+This module wires a two-node pipeline: a `retrieve` node fetches relevant context, then a
+`generate` node injects that context into a prompt and calls the LLM.
+
+toc::[]
+
+== Architecture
+
+image::02-rag-chatbot.png[RAG + Chatbot Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+RAG splits the work across two nodes so each has a single responsibility:
+
+* **`retrieve`** — queries a data source (here, a fake in-memory store) and writes the results
+  into `state["context"]`.
+* **`generate`** — reads both `state["question"]` and `state["context"]` to build a prompt,
+  then calls the LLM and stores the answer in `state["answer"]`.
+
+Because we own the state schema, we define a custom `TypedDict` called `RAGState` instead of
+using `MessagesState`. This gives us explicit, named fields (`question`, `context`, `answer`)
+that make the data flow self-documenting.
+
+Each node returns only the *keys it changes* — LangGraph merges the partial update into the
+shared state automatically.
+
+NOTE: Replacing `fake_retriever` with a real vectorstore (e.g., `Chroma`, `Pinecone`) is the
+only change needed to make this production-ready. The graph structure stays identical.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+Simple RAG + Chatbot — retrieve then generate.
+
+flowchart LR
+  __start__ --> retrieve --> generate --> __end__
+
+A retrieve node fetches fake docs; a generate node formats context + question
+into a prompt and calls the LLM.
+Run: OPENAI_API_KEY=sk-... python 02_rag_chatbot.py
+"""
+
+from typing import TypedDict, List
+from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+# --- Fake retriever (replace with a real vectorstore retriever) ---
+FAKE_DOCS = [
+    Document(page_content="LangGraph is a library for building stateful, multi-actor LLM applications."),
+    Document(page_content="LangChain provides tools and abstractions for working with language models."),
+]
+
+def fake_retriever(query: str) -> List[Document]:
+    return FAKE_DOCS
+
+
+# --- State ---
+class RAGState(TypedDict):
+    question: str
+    context: List[Document]
+    answer: str
+
+
+# --- Nodes ---
+def retrieve(state: RAGState) -> RAGState:
+    docs = fake_retriever(state["question"])
+    return {"context": docs}
+
+
+def generate(state: RAGState) -> RAGState:
+    context_text = "\n\n".join(doc.page_content for doc in state["context"])
+    prompt = f"Context:\n{context_text}\n\nQuestion: {state['question']}\nAnswer:"
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return {"answer": response.content}
+
+
+# --- Graph ---
+graph = (
+    StateGraph(RAGState)
+    .add_node("retrieve", retrieve)
+    .add_node("generate", generate)
+    .add_edge(START, "retrieve")
+    .add_edge("retrieve", "generate")
+    .add_edge("generate", END)
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({"question": "What is LangGraph?"})
+    print("Answer:", result["answer"])
+----
+
+TIP: Notice the generate node reads `state["context"]` even though it did not set it — any node
+can read any key in the state. Data flows through the shared state object, not through direct
+function calls.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > 02_rag_chatbot.py << 'PYEOF'
+"""
+Simple RAG + Chatbot — retrieve then generate.
+
+flowchart LR
+  __start__ --> retrieve --> generate --> __end__
+
+A retrieve node fetches fake docs; a generate node formats context + question
+into a prompt and calls the LLM.
+Run: OPENAI_API_KEY=sk-... python 02_rag_chatbot.py
+"""
+
+from typing import TypedDict, List
+from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+FAKE_DOCS = [
+    Document(page_content="LangGraph is a library for building stateful, multi-actor LLM applications."),
+    Document(page_content="LangChain provides tools and abstractions for working with language models."),
+]
+
+def fake_retriever(query: str) -> List[Document]:
+    return FAKE_DOCS
+
+class RAGState(TypedDict):
+    question: str
+    context: List[Document]
+    answer: str
+
+def retrieve(state: RAGState) -> RAGState:
+    docs = fake_retriever(state["question"])
+    return {"context": docs}
+
+def generate(state: RAGState) -> RAGState:
+    context_text = "\n\n".join(doc.page_content for doc in state["context"])
+    prompt = f"Context:\n{context_text}\n\nQuestion: {state['question']}\nAnswer:"
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return {"answer": response.content}
+
+graph = (
+    StateGraph(RAGState)
+    .add_node("retrieve", retrieve)
+    .add_node("generate", generate)
+    .add_edge(START, "retrieve")
+    .add_edge("retrieve", "generate")
+    .add_edge("generate", END)
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({"question": "What is LangGraph?"})
+    print("Answer:", result["answer"])
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python 02_rag_chatbot.py
+----
+
+=== Exercises
+
+. **Add a third document.** Append another `Document` to `FAKE_DOCS` with content of your choice
+  and see how it influences the generated answer.
+. **Add a `score` field.** Extend `RAGState` with `score: float`. In the `generate` node,
+  ask the LLM to rate its own answer confidence (0–1) and store it in `state["score"]`.
+. **Swap the retriever.** Replace `fake_retriever` with a LangChain `Chroma` or `FAISS`
+  vectorstore retriever — the graph wiring requires zero changes.
+
+== Key Takeaways
+
+* Custom `TypedDict` state gives you named, typed fields instead of a generic message list.
+* Nodes only need to return the keys they change — LangGraph merges the rest.
+* The retrieve/generate split maps naturally onto the two nodes: one for I/O, one for reasoning.
+* Swapping the retriever implementation is decoupled from the graph structure.

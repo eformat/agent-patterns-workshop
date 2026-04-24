@@ -1,0 +1,152 @@
+= Simple Chatbot
+:navtitle: Module 1 — Simple Chatbot
+:toc: macro
+:toclevels: 1
+:icons: font
+
+The simplest LangGraph application: a single node that calls an LLM and returns its reply.
+There is no branching, no memory beyond what you pass in, and no tools — just the foundational
+wiring that every more-complex pattern builds on.
+
+toc::[]
+
+== Architecture
+
+image::01-chatbot.png[Simple Chatbot Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+LangGraph models your application as a *directed graph*. Every graph has three ingredients:
+
+* **State** — a typed dictionary shared by all nodes. Here we use the built-in `MessagesState`,
+  which holds a list of `BaseMessage` objects and automatically *appends* new messages rather
+  than overwriting them.
+* **Nodes** — Python functions that receive the current state and return a partial state update.
+* **Edges** — connections between nodes (including the special `START` and `END` sentinels).
+
+`StateGraph` is the builder object. The fluent API (`.add_node()`, `.add_edge()`, `.compile()`)
+produces a runnable `CompiledGraph`. Calling `graph.invoke(state)` runs the graph to completion
+and returns the final state.
+
+NOTE: `MessagesState` uses LangGraph's built-in `add_messages` reducer, so returning
+`{"messages": [response]}` from a node *appends* the response — it does not replace the list.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+Simple Chatbot — single LLM node in a graph.
+
+flowchart LR
+  __start__ --> chatbot_node --> __end__
+
+StateGraph with MessagesState; one node calls an LLM and appends the reply.
+Run: OPENAI_API_KEY=sk-... python 01_chatbot.py
+"""
+
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langchain_core.messages import HumanMessage
+
+# Set OPENAI_API_KEY in your environment before running.
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+
+def chatbot_node(state: MessagesState) -> MessagesState:
+    """Call the LLM with the current message history and append its reply."""
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+
+# Build graph
+graph = (
+    StateGraph(MessagesState)
+    .add_node("chatbot", chatbot_node)
+    .add_edge(START, "chatbot")
+    .add_edge("chatbot", END)
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({"messages": [HumanMessage(content="Hello! What is 2 + 2?")]})
+    for msg in result["messages"]:
+        print(f"[{msg.type}] {msg.content}")
+----
+
+TIP: The node name `"chatbot"` in `.add_node()` is just a label; the function name
+`chatbot_node` is what actually runs. You can name them differently.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > 01_chatbot.py << 'PYEOF'
+"""
+Simple Chatbot — single LLM node in a graph.
+
+flowchart LR
+  __start__ --> chatbot_node --> __end__
+
+StateGraph with MessagesState; one node calls an LLM and appends the reply.
+Run: OPENAI_API_KEY=sk-... python 01_chatbot.py
+"""
+
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langchain_core.messages import HumanMessage
+
+# Set OPENAI_API_KEY in your environment before running.
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+
+def chatbot_node(state: MessagesState) -> MessagesState:
+    """Call the LLM with the current message history and append its reply."""
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+
+# Build graph
+graph = (
+    StateGraph(MessagesState)
+    .add_node("chatbot", chatbot_node)
+    .add_edge(START, "chatbot")
+    .add_edge("chatbot", END)
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({"messages": [HumanMessage(content="Hello! What is 2 + 2?")]})
+    for msg in result["messages"]:
+        print(f"[{msg.type}] {msg.content}")
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python 01_chatbot.py
+----
+
+=== Exercises
+
+. **Change the question.** Edit the `HumanMessage` content to ask something else and re-run.
+. **Add a system prompt.** Import `SystemMessage` and prepend one to the messages list before
+  calling `graph.invoke`. What changes in the LLM's tone?
+. **Multi-turn.** Call `graph.invoke` twice, passing the full `result["messages"]` list (plus a
+  new `HumanMessage`) as input the second time to simulate a conversation turn.
+
+WARNING: Passing the entire message history on every call means your context window grows with
+each turn. This is intentional here — later modules introduce checkpointers to handle this automatically.
+
+== Key Takeaways
+
+* `StateGraph` + `MessagesState` is the minimal LangGraph scaffold.
+* Nodes are plain Python functions — no special base class required.
+* `MessagesState` appends messages automatically via its built-in reducer.
+* `.compile()` validates the graph and returns the runnable object you actually call.

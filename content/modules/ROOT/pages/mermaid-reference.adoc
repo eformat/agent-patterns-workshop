@@ -1,0 +1,140 @@
+= Mermaid Diagram Reference
+:navtitle: Mermaid Reference
+:icons: font
+
+This page contains the Mermaid source code for all architecture diagrams used in the workshop.
+Use these to regenerate diagrams or adapt them for your own projects.
+
+== Module 1: Simple Chatbot
+
+[source,mermaid]
+----
+flowchart LR
+  __start__([__start__]) --> chatbot_node[chatbot_node]
+  chatbot_node --> __end__([__end__])
+  style __start__ fill:#ffdfba
+  style __end__ fill:#baffc9
+----
+
+== Module 2: RAG + Chatbot
+
+[source,mermaid]
+----
+flowchart LR
+  __start__([__start__]) --> retrieve[retrieve]
+  retrieve --> generate[generate]
+  generate --> __end__([__end__])
+  style __start__ fill:#ffdfba
+  style __end__ fill:#baffc9
+----
+
+== Module 3: Agent Tool Loop
+
+[source,mermaid]
+----
+flowchart LR
+  __start__([__start__]) --> llm_agent[llm_agent]
+  llm_agent --> tools_node[tools_node]
+  llm_agent --> __end__([__end__])
+  tools_node --> llm_agent
+  style __start__ fill:#ffdfba
+  style __end__ fill:#baffc9
+----
+
+== Module 4: ReAct Agent
+
+[source,mermaid]
+----
+flowchart LR
+  __start__([__start__]) --> llm_agent_reasoning[llm_agent_reasoning]
+  llm_agent_reasoning --> tools_node[tools_node]
+  llm_agent_reasoning --> __end__([__end__])
+  tools_node --> llm_agent_reasoning
+  style __start__ fill:#ffdfba
+  style __end__ fill:#baffc9
+----
+
+== Module 5: Multi-Agent Supervisor
+
+[source,mermaid]
+----
+flowchart TD
+  __start__([__start__]) --> supervisor[supervisor]
+  supervisor --> agent_1[agent_1]
+  supervisor --> agent_2[agent_2]
+  supervisor --> __end__([__end__])
+  agent_1 --> supervisor
+  agent_2 --> supervisor
+  style __start__ fill:#ffdfba
+  style __end__ fill:#baffc9
+----
+
+== Module 6: Conditional Edge Handoff
+
+[source,mermaid]
+----
+flowchart TD
+  User([User])
+  Supervisor[Supervisor Agent]
+  CE{Conditional Edge}
+  SA1([Specialized Agent])
+  SA2([Specialized Agent])
+  SA3([Specialized Agent])
+  User -->|1. execute| Supervisor
+  Supervisor -->|2. Routing Function| CE
+  CE -.->|route| SA1
+  CE -.->|route| SA2
+  CE -.->|route| SA3
+----
+
+== Module 7: Dynamic Handoff
+
+[source,mermaid]
+----
+flowchart TD
+  User([User])
+  SA1([Specialized Agent])
+  SA2([Specialized Agent])
+  SA3([Specialized Agent])
+  subgraph SUP[Supervisor Agent]
+    DR[2. Dynamic Routing Agent decides]
+  end
+  User -->|1. execute| DR
+  DR -.->|route| SA1
+  DR -.->|route| SA2
+  DR -.->|route| SA3
+----
+
+== Module 8: Agent Pipeline
+
+[source,mermaid]
+----
+flowchart LR
+  User([User])
+  A1(Agent)
+  A2(Agent)
+  A3(Agent)
+  Out[...]
+  User -->|1. execute| A1
+  A1 --> A2
+  A2 --> A3
+  A3 --> Out
+----
+
+== Module 9: Team Agent Swarms
+
+[source,mermaid]
+----
+flowchart LR
+  subgraph T1["Team 1"]
+    direction TB
+    W1A["Worker\nAgent"] --- W1B["Worker\nAgent"]
+    W1B --- L1["Leader\nAgent"]
+  end
+  L1 <---> L2
+  subgraph T2["Team 2"]
+    direction TB
+    L2["Leader\nAgent"] --- W2A["Worker\nAgent"]
+    L2 --- W2B["Worker\nAgent"]
+  end
+----

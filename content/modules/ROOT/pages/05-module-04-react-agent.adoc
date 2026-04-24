@@ -1,0 +1,147 @@
+= ReAct Agent
+:navtitle: Module 4 — ReAct Agent
+:toc: macro
+:toclevels: 1
+:icons: font
+
+ReAct (Reasoning + Acting) is the dominant agentic pattern: the model *thinks out loud* before
+each tool call and after each observation. LangGraph ships `create_react_agent` as a one-liner
+that wires the full Thought -> Action -> Observation loop for you.
+
+toc::[]
+
+== Architecture
+
+image::04-react-agent.png[ReAct Agent Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+The graph topology is identical to Module 3 — what changes is *how* the LLM is prompted.
+`create_react_agent` automatically adds a system prompt that instructs the model to reason
+before acting, producing explicit chain-of-thought that you can inspect in the message stream.
+
+=== create_react_agent
+
+`langgraph.prebuilt.create_react_agent(llm, tools)` returns a fully compiled `CompiledGraph`.
+Under the hood it:
+
+. Binds the tools to the LLM with `.bind_tools()`.
+. Creates a `ToolNode` for execution.
+. Wires the same conditional edge from Module 3 (`tool_calls` present -> tools, else END).
+. Adds a reasoning system prompt so the model narrates its plan.
+
+=== When to use prebuilt vs. custom
+
+`create_react_agent` is the right choice when the default loop is sufficient.
+Build the loop manually (as in Module 3) when you need custom state fields, mid-loop
+checkpoints, or non-standard routing logic.
+
+NOTE: The `content` field of an `AIMessage` may be empty when the model only emits tool calls.
+The example code handles this by falling back to `str(getattr(msg, "tool_calls", ""))`.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+ReAct Agent — reasoning + acting loop via langgraph.prebuilt.
+
+Uses create_react_agent which wires the Thought/Action/Observation loop
+automatically. Provide tools; the agent reasons before each action.
+Run: OPENAI_API_KEY=sk-... python 04_react_agent.py
+"""
+
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+
+@tool
+def get_weather(city: str) -> str:
+    """Return a fake weather report for a city."""
+    return f"The weather in {city} is 22°C and sunny."
+
+
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate a basic math expression, e.g. '3 * (2 + 5)'."""
+    return str(eval(expression))  # noqa: S307 — demo only
+
+
+tools = [get_weather, calculator]
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+graph = create_react_agent(llm, tools=tools)
+
+if __name__ == "__main__":
+    from langchain_core.messages import HumanMessage
+
+    query = "What's the weather in Paris? Also, what is 123 * 456?"
+    result = graph.invoke({"messages": [HumanMessage(content=query)]})
+
+    for msg in result["messages"]:
+        label = msg.type.upper()
+        content = msg.content or str(getattr(msg, "tool_calls", ""))
+        print(f"[{label}] {content}")
+----
+
+TIP: Ask a question that requires *both* tools. Watch the message list to see the agent reason,
+call each tool, observe results, then synthesize a final answer.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > 04_react_agent.py << 'PYEOF'
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+@tool
+def get_weather(city: str) -> str:
+    """Return a fake weather report for a city."""
+    return f"The weather in {city} is 22°C and sunny."
+
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate a basic math expression, e.g. '3 * (2 + 5)'."""
+    return str(eval(expression))
+
+tools = [get_weather, calculator]
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+graph = create_react_agent(llm, tools=tools)
+
+if __name__ == "__main__":
+    from langchain_core.messages import HumanMessage
+    query = "What's the weather in Paris? Also, what is 123 * 456?"
+    result = graph.invoke({"messages": [HumanMessage(content=query)]})
+    for msg in result["messages"]:
+        label = msg.type.upper()
+        content = msg.content or str(getattr(msg, "tool_calls", ""))
+        print(f"[{label}] {content}")
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python 04_react_agent.py
+----
+
+=== Exercises
+
+. **Add a `get_time` tool.** Implement it returning a fake local time. Ask for both weather and time.
+. **Count message types.** After the graph returns, count `human`, `ai`, and `tool` messages.
+. **Inject a system prompt.** Pass a `prompt` parameter to `create_react_agent` telling it to answer in Spanish.
+
+== Key Takeaways
+
+* `create_react_agent` is the idiomatic LangGraph shortcut for the ReAct pattern.
+* The graph topology is identical to Module 3; the difference is the reasoning prompt.
+* `AIMessage.content` can be empty when the model only emits tool calls — always guard against it.
+* Use prebuilt for standard loops; build manually when you need custom routing or state.

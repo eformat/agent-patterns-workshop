@@ -1,0 +1,171 @@
+= Conditional Edge Handoff
+:navtitle: Module 6 — Conditional Handoff
+:toc: macro
+:toclevels: 1
+:icons: font
+
+A supervisor node inspects the incoming message and uses a *static Python function* to dispatch to one of three specialized agents.
+No LLM call is needed for the routing decision itself — the logic lives entirely in Python keyword matching.
+This makes routing fast, deterministic, and cheap.
+
+toc::[]
+
+== Architecture
+
+image::06-conditional-handoff.png[Conditional Edge Handoff Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+`add_conditional_edges` accepts a *routing function* that receives the current state and returns the name of the next node to run.
+LangGraph calls this function after the source node completes and follows the returned edge.
+
+Key concepts:
+
+* `MessagesState` — built-in state type holding a list of `BaseMessage` objects.
+* `add_conditional_edges(source, fn)` — wires `source` so that `fn(state)` picks the next node at runtime.
+* `Literal` return type — type-safe enumeration of valid routing targets.
+* Pass-through supervisor — the supervisor does no work; routing logic lives in `route()`.
+
+NOTE: When your routing rules are stable keyword checks or regex patterns, a static routing function is preferable to an LLM call. It's faster, cheaper, and easier to test.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+Multi-agent with conditional edge handoff.
+A supervisor node inspects the user message and uses a static routing function
+to dispatch to one of three specialized agent nodes (math, writing, coding).
+"""
+
+from typing import Literal
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.graph import StateGraph, START, END, MessagesState
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+def route(state: MessagesState) -> Literal["math_agent", "writing_agent", "coding_agent"]:
+    """Inspect the last human message and pick a specialist."""
+    text = state["messages"][-1].content.lower()
+    if any(k in text for k in ["calculate", "math", "number", "equation"]):
+        return "math_agent"
+    if any(k in text for k in ["write", "essay", "poem", "story"]):
+        return "writing_agent"
+    return "coding_agent"
+
+def supervisor(state: MessagesState) -> MessagesState:
+    return state  # pass-through
+
+def math_agent(state: MessagesState) -> MessagesState:
+    response = llm.invoke([HumanMessage(content="You are a math expert. Answer concisely.")] + state["messages"])
+    return {"messages": state["messages"] + [AIMessage(content=f"[Math] {response.content}")]}
+
+def writing_agent(state: MessagesState) -> MessagesState:
+    response = llm.invoke([HumanMessage(content="You are a creative writing expert.")] + state["messages"])
+    return {"messages": state["messages"] + [AIMessage(content=f"[Writing] {response.content}")]}
+
+def coding_agent(state: MessagesState) -> MessagesState:
+    response = llm.invoke([HumanMessage(content="You are a software engineering expert.")] + state["messages"])
+    return {"messages": state["messages"] + [AIMessage(content=f"[Coding] {response.content}")]}
+
+builder = StateGraph(MessagesState)
+builder.add_node("supervisor",    supervisor)
+builder.add_node("math_agent",    math_agent)
+builder.add_node("writing_agent", writing_agent)
+builder.add_node("coding_agent",  coding_agent)
+
+builder.add_edge(START, "supervisor")
+builder.add_conditional_edges("supervisor", route)
+builder.add_edge("math_agent",    END)
+builder.add_edge("writing_agent", END)
+builder.add_edge("coding_agent",  END)
+
+graph = builder.compile()
+
+if __name__ == "__main__":
+    queries = [
+        "Calculate the area of a circle with radius 5.",
+        "Write a short haiku about autumn.",
+        "How do I reverse a list in Python?",
+    ]
+    for query in queries:
+        print(f"\nUser: {query}")
+        result = graph.invoke({"messages": [HumanMessage(content=query)]})
+        print(result["messages"][-1].content)
+----
+
+TIP: `route()` is registered with `add_conditional_edges`, not `add_node`. It runs between nodes and never appears in the graph's node list.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > conditional_handoff.py << 'PYEOF'
+from typing import Literal
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.graph import StateGraph, START, END, MessagesState
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+def route(state: MessagesState) -> Literal["math_agent", "writing_agent", "coding_agent"]:
+    text = state["messages"][-1].content.lower()
+    if any(k in text for k in ["calculate", "math", "number", "equation"]):
+        return "math_agent"
+    if any(k in text for k in ["write", "essay", "poem", "story"]):
+        return "writing_agent"
+    return "coding_agent"
+
+def supervisor(state): return state
+def math_agent(state):
+    r = llm.invoke([HumanMessage(content="You are a math expert.")] + state["messages"])
+    return {"messages": state["messages"] + [AIMessage(content=f"[Math] {r.content}")]}
+def writing_agent(state):
+    r = llm.invoke([HumanMessage(content="You are a writing expert.")] + state["messages"])
+    return {"messages": state["messages"] + [AIMessage(content=f"[Writing] {r.content}")]}
+def coding_agent(state):
+    r = llm.invoke([HumanMessage(content="You are a coding expert.")] + state["messages"])
+    return {"messages": state["messages"] + [AIMessage(content=f"[Coding] {r.content}")]}
+
+builder = StateGraph(MessagesState)
+for name, fn in [("supervisor", supervisor), ("math_agent", math_agent),
+                 ("writing_agent", writing_agent), ("coding_agent", coding_agent)]:
+    builder.add_node(name, fn)
+builder.add_edge(START, "supervisor")
+builder.add_conditional_edges("supervisor", route)
+for a in ["math_agent", "writing_agent", "coding_agent"]:
+    builder.add_edge(a, END)
+graph = builder.compile()
+
+if __name__ == "__main__":
+    for q in ["Calculate pi * 5^2", "Write a haiku about autumn", "How to reverse a list in Python?"]:
+        print(f"\nUser: {q}")
+        result = graph.invoke({"messages": [HumanMessage(content=q)]})
+        print(result["messages"][-1].content)
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python conditional_handoff.py
+----
+
+=== Exercises
+
+. **Add a fourth agent.** Create a `history_agent` and update `route()` to detect history keywords.
+. **Log the routing decision.** Print which agent was selected before returning state.
+. **Test edge cases.** What happens with "Write me a math equation"? Which agent wins?
+
+== Key Takeaways
+
+* `add_conditional_edges` wires a Python function to select the next step at runtime.
+* Static routing is deterministic, fast, and costs zero LLM tokens for the decision.
+* The supervisor can be a pass-through when routing logic lives in the edge function.
+* Each specialist terminates at `END` — a clean fan-out with no merging needed.

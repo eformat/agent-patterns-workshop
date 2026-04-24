@@ -1,0 +1,24 @@
+* xref:index.adoc[Welcome]
+
+.Workshop
+* xref:01-overview.adoc[Workshop Overview]
+* xref:getting-connected.adoc[Getting Connected]
+
+.Single Agent Patterns
+* xref:02-module-01-chatbot.adoc[Module 1: Simple Chatbot]
+* xref:03-module-02-rag-chatbot.adoc[Module 2: RAG + Chatbot]
+* xref:04-module-03-agent-loop.adoc[Module 3: Agent Tool Loop]
+* xref:05-module-04-react-agent.adoc[Module 4: ReAct Agent]
+
+.Multi-Agent Patterns
+* xref:06-module-05-supervisor.adoc[Module 5: Supervisor]
+* xref:07-module-06-conditional-handoff.adoc[Module 6: Conditional Handoff]
+* xref:08-module-07-dynamic-handoff.adoc[Module 7: Dynamic Handoff]
+* xref:09-module-08-pipeline.adoc[Module 8: Agent Pipeline]
+* xref:10-module-09-team-swarms.adoc[Module 9: Team Swarms]
+
+.Wrap-up
+* xref:11-conclusion.adoc[Conclusion]
+
+.Reference
+* xref:mermaid-reference.adoc[Mermaid Diagram Source]

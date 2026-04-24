@@ -1,0 +1,182 @@
+= Agent Tool Loop
+:navtitle: Module 3 — Agent Tool Loop
+:toc: macro
+:toclevels: 1
+:icons: font
+
+Here the graph gains two new superpowers: *conditional edges* and *cycles*.
+The LLM is bound with a tool and decides on every step whether to call it or to stop —
+making this the first truly autonomous pattern in the workshop.
+
+toc::[]
+
+== Architecture
+
+image::03-agent-loop.png[Agent Tool Loop Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+Two concepts make the loop possible:
+
+=== Conditional Edges
+
+`.add_conditional_edges(source, router_fn, targets)` calls `router_fn` after `source` completes
+and uses its return value to pick the next node. Here `should_continue` inspects the last
+message: if the LLM emitted tool calls, route to `"tools"`; otherwise route to `END`.
+
+=== Cycles
+
+Unlike the linear graphs in the previous modules, edges can point *backwards* — `tools_node`
+sends execution back to `llm_agent`. LangGraph tracks state across iterations so the LLM always
+sees the full conversation history, including tool results.
+
+=== ToolNode
+
+`langgraph.prebuilt.ToolNode` is a prebuilt node that reads `tool_calls` from the last message,
+executes each tool, and appends `ToolMessage` results to state. You hand it your tool list and
+it handles dispatch, serialization, and error wrapping automatically.
+
+NOTE: The LLM must be bound with tools via `.bind_tools(tools)` so it knows the available
+function signatures. Without this, it will never emit `tool_calls`.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+AI Agent with tool loop — LLM decides whether to call tools or finish.
+
+flowchart LR
+  __start__ --> llm_agent --> tools_node --> llm_agent
+  llm_agent --> __end__
+
+The LLM is bound with a calculator tool. A conditional edge routes to the
+tools node when tool calls are present, otherwise ends.
+Run: OPENAI_API_KEY=sk-... python 03_agent_loop.py
+"""
+
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.prebuilt import ToolNode
+
+
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate a basic math expression, e.g. '3 * (2 + 5)'."""
+    return str(eval(expression))  # noqa: S307 — demo only
+
+
+tools = [calculator]
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).bind_tools(tools)
+
+
+def llm_agent(state: MessagesState) -> MessagesState:
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+
+def should_continue(state: MessagesState) -> str:
+    """Route to tools if the last message has tool calls, else end."""
+    last = state["messages"][-1]
+    return "tools" if getattr(last, "tool_calls", None) else END
+
+
+tools_node = ToolNode(tools)
+
+graph = (
+    StateGraph(MessagesState)
+    .add_node("llm_agent", llm_agent)
+    .add_node("tools", tools_node)
+    .add_edge(START, "llm_agent")
+    .add_conditional_edges("llm_agent", should_continue, ["tools", END])
+    .add_edge("tools", "llm_agent")
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({"messages": [HumanMessage(content="What is 17 * 38?")]})
+    for msg in result["messages"]:
+        print(f"[{msg.type}] {msg.content}")
+----
+
+TIP: Print `msg.tool_calls` on `AIMessage` objects to see the structured arguments the LLM
+passed to the calculator — a great way to debug unexpected tool calls.
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > 03_agent_loop.py << 'PYEOF'
+"""
+AI Agent with tool loop — LLM decides whether to call tools or finish.
+"""
+
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.prebuilt import ToolNode
+
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate a basic math expression, e.g. '3 * (2 + 5)'."""
+    return str(eval(expression))
+
+tools = [calculator]
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).bind_tools(tools)
+
+def llm_agent(state: MessagesState) -> MessagesState:
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+def should_continue(state: MessagesState) -> str:
+    last = state["messages"][-1]
+    return "tools" if getattr(last, "tool_calls", None) else END
+
+tools_node = ToolNode(tools)
+
+graph = (
+    StateGraph(MessagesState)
+    .add_node("llm_agent", llm_agent)
+    .add_node("tools", tools_node)
+    .add_edge(START, "llm_agent")
+    .add_conditional_edges("llm_agent", should_continue, ["tools", END])
+    .add_edge("tools", "llm_agent")
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({"messages": [HumanMessage(content="What is 17 * 38?")]})
+    for msg in result["messages"]:
+        print(f"[{msg.type}] {msg.content}")
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python 03_agent_loop.py
+----
+
+=== Exercises
+
+. **Add a second tool.** Write a `@tool` called `word_count(text: str) -> str` that returns the
+  number of words in a string. Add it to `tools` and ask the agent a question that requires both tools.
+. **Count loop iterations.** Add an `iteration: int` field to a custom state and increment it in `llm_agent`.
+. **Add a recursion limit.** Pass `recursion_limit=5` to `graph.invoke(...)` and observe the error on a looping query.
+
+WARNING: Never use `eval()` in production. Use a safe math parser like `numexpr` or `simpleeval`.
+
+== Key Takeaways
+
+* `add_conditional_edges` is the switch that turns a linear pipeline into a decision-making loop.
+* `ToolNode` handles tool dispatch boilerplate — you only need to define the tools themselves.
+* Cycles are first-class in LangGraph; state accumulates across iterations via message reducers.
+* The router function returns a *string* matching a node name (or `END`) — keep it simple.

@@ -1,0 +1,226 @@
+= Multi-Agent Supervisor
+:navtitle: Module 5 — Multi-Agent Supervisor
+:toc: macro
+:toclevels: 1
+:icons: font
+
+A supervisor LLM orchestrates a team of specialized worker agents, deciding at each step which
+agent should act next — or whether the task is complete. This is the first *multi-agent* pattern
+in the workshop and introduces structured LLM output for routing decisions.
+
+toc::[]
+
+== Architecture
+
+image::05-supervisor.png[Multi-Agent Supervisor Architecture,link=self,window=blank,width=500]
+
+== How It Works
+
+=== The Supervisor Pattern
+
+Every worker node routes *back* to the supervisor after it finishes. The supervisor then
+decides the next destination. This "hub and spoke" topology means you can add new worker
+agents by adding a node and two edges — the supervisor prompt is the only other thing to update.
+
+=== Structured Output for Routing
+
+Instead of parsing free-form text, the supervisor LLM returns a Pydantic model:
+
+[source,python]
+----
+class RouteDecision(BaseModel):
+    next: Literal["researcher", "writer", "FINISH"]
+----
+
+`llm.with_structured_output(RouteDecision)` constrains the model to valid options, making
+routing deterministic and error-free.
+
+=== Conditional Edges off the Supervisor
+
+`route_after_supervisor` reads the `ROUTE:` prefix, strips it, and returns either a worker name or `END`.
+
+NOTE: Encoding the routing decision as `ROUTE:destination` in an `AIMessage` is a pragmatic
+workaround. In production you would typically add a dedicated `next_agent: str` field to your state.
+
+== Code Walkthrough
+
+[source,python]
+----
+"""
+Multi-agent supervisor — supervisor routes to specialized agents.
+
+A supervisor LLM decides which agent handles the next step (or finishes).
+Two worker nodes: "researcher" (finds facts) and "writer" (drafts content).
+Run: OPENAI_API_KEY=sk-... python 05_supervisor.py
+"""
+
+from typing import Literal
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END, MessagesState
+from pydantic import BaseModel
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+WORKERS = ["researcher", "writer"]
+
+
+class RouteDecision(BaseModel):
+    next: Literal["researcher", "writer", "FINISH"]
+
+
+supervisor_llm = llm.with_structured_output(RouteDecision)
+
+
+def supervisor(state: MessagesState) -> MessagesState:
+    system = SystemMessage(
+        content=(
+            "You are a supervisor managing two agents: 'researcher' and 'writer'.\n"
+            "Given the conversation, decide who should act next, or reply 'FINISH' "
+            "if the task is complete.\n"
+            f"Options: {WORKERS + ['FINISH']}"
+        )
+    )
+    decision = supervisor_llm.invoke([system] + state["messages"])
+    return {"messages": [AIMessage(content=f"ROUTE:{decision.next}")]}
+
+
+def route_after_supervisor(state: MessagesState) -> str:
+    last = state["messages"][-1].content
+    if last.startswith("ROUTE:"):
+        dest = last.removeprefix("ROUTE:")
+        return END if dest == "FINISH" else dest
+    return END
+
+
+def researcher(state: MessagesState) -> MessagesState:
+    task = state["messages"][0].content
+    response = llm.invoke([
+        SystemMessage(content="You are a research assistant. Find relevant facts."),
+        HumanMessage(content=task),
+    ])
+    return {"messages": [response]}
+
+
+def writer(state: MessagesState) -> MessagesState:
+    response = llm.invoke([
+        SystemMessage(content="You are a writer. Draft a concise, polished answer using the research above."),
+    ] + state["messages"])
+    return {"messages": [response]}
+
+
+graph = (
+    StateGraph(MessagesState)
+    .add_node("supervisor", supervisor)
+    .add_node("researcher", researcher)
+    .add_node("writer", writer)
+    .add_edge(START, "supervisor")
+    .add_conditional_edges("supervisor", route_after_supervisor, ["researcher", "writer", END])
+    .add_edge("researcher", "supervisor")
+    .add_edge("writer", "supervisor")
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({
+        "messages": [HumanMessage(content="Write a short paragraph about the history of the internet.")]
+    })
+    print("\n--- Final conversation ---")
+    for msg in result["messages"]:
+        print(f"[{msg.type.upper()}] {msg.content[:120]}")
+----
+
+== Try It Yourself
+
+Create the file:
+
+[.copypaste]
+[source,bash]
+----
+cat > 05_supervisor.py << 'PYEOF'
+from typing import Literal
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END, MessagesState
+from pydantic import BaseModel
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+WORKERS = ["researcher", "writer"]
+
+class RouteDecision(BaseModel):
+    next: Literal["researcher", "writer", "FINISH"]
+
+supervisor_llm = llm.with_structured_output(RouteDecision)
+
+def supervisor(state: MessagesState) -> MessagesState:
+    system = SystemMessage(content=(
+        "You are a supervisor managing two agents: 'researcher' and 'writer'.\n"
+        "Given the conversation, decide who should act next, or reply 'FINISH' "
+        "if the task is complete.\n"
+        f"Options: {WORKERS + ['FINISH']}"
+    ))
+    decision = supervisor_llm.invoke([system] + state["messages"])
+    return {"messages": [AIMessage(content=f"ROUTE:{decision.next}")]}
+
+def route_after_supervisor(state: MessagesState) -> str:
+    last = state["messages"][-1].content
+    if last.startswith("ROUTE:"):
+        dest = last.removeprefix("ROUTE:")
+        return END if dest == "FINISH" else dest
+    return END
+
+def researcher(state: MessagesState) -> MessagesState:
+    task = state["messages"][0].content
+    response = llm.invoke([
+        SystemMessage(content="You are a research assistant. Find relevant facts."),
+        HumanMessage(content=task),
+    ])
+    return {"messages": [response]}
+
+def writer(state: MessagesState) -> MessagesState:
+    response = llm.invoke([
+        SystemMessage(content="You are a writer. Draft a concise, polished answer."),
+    ] + state["messages"])
+    return {"messages": [response]}
+
+graph = (
+    StateGraph(MessagesState)
+    .add_node("supervisor", supervisor)
+    .add_node("researcher", researcher)
+    .add_node("writer", writer)
+    .add_edge(START, "supervisor")
+    .add_conditional_edges("supervisor", route_after_supervisor, ["researcher", "writer", END])
+    .add_edge("researcher", "supervisor")
+    .add_edge("writer", "supervisor")
+    .compile()
+)
+
+if __name__ == "__main__":
+    result = graph.invoke({
+        "messages": [HumanMessage(content="Write a short paragraph about the history of the internet.")]
+    })
+    for msg in result["messages"]:
+        print(f"[{msg.type.upper()}] {msg.content[:120]}")
+PYEOF
+----
+
+Run it:
+
+[.copypaste]
+[source,bash]
+----
+python 05_supervisor.py
+----
+
+=== Exercises
+
+. **Add a third worker.** Create an `editor` node and wire it in. Extend `RouteDecision` to include it.
+. **Count supervisor calls.** Track how many routing decisions one task takes.
+. **Use a dedicated state field.** Replace the `ROUTE:` string hack with a proper `next_agent: str` field.
+
+== Key Takeaways
+
+* The supervisor pattern centralizes routing logic in one node, keeping workers simple.
+* `with_structured_output(PydanticModel)` turns routing into a type-safe function call.
+* Workers always return to the supervisor — only the supervisor decides when to stop.
+* Adding a new worker requires only a new node, two edges, and a prompt update.

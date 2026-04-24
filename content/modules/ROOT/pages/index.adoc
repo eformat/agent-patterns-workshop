@@ -1,0 +1,31 @@
+= LangGraph Agent Patterns Workshop
+:navtitle: Welcome
+:icons: font
+
+Welcome to the **LangGraph Agent Patterns Workshop**! In this hands-on lab you will build nine progressively complex AI agent architectures using https://langchain-ai.github.io/langgraph/[LangGraph^] and https://python.langchain.com/[LangChain^].
+
+== What You'll Learn
+
+* How to build stateful LLM applications with `StateGraph`
+* Single-agent patterns: chatbots, RAG, tool loops, and ReAct agents
+* Multi-agent patterns: supervisors, conditional handoffs, dynamic routing, pipelines, and team swarms
+* When to use each pattern and the trade-offs involved
+
+== Who This Is For
+
+Developers familiar with Python who want to understand agentic AI architectures. Prior experience with LLMs is helpful but not required — each module is self-contained with runnable code.
+
+== Prerequisites
+
+* Python 3.10+
+* An OpenAI API key (set as `OPENAI_API_KEY` environment variable)
+* `pip install langchain-openai langgraph`
+
+== Estimated Time
+
+* **Full workshop:** 60–90 minutes
+* **Per module:** 5–10 minutes each
+
+== Let's Get Started
+
+xref:01-overview.adoc[Start with the Workshop Overview →]
