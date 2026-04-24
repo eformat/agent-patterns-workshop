@@ -14,9 +14,5 @@ ui:
     snapshot: true
   supplemental_files: ./content/supplemental-ui
 
-antora:
-  extensions:
-    - '@sntke/antora-mermaid-extension'
-
 output:
   dir: ./www
